@@ -40,6 +40,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "beautifulsoup4>=4.15.0",
     "cryptography>=48.0.1",
     "fastmcp>=3.4.4,<4",
     "inquirer>=3.4.0",
