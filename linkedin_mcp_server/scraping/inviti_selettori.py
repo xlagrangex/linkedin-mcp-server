@@ -67,6 +67,7 @@ _RE_CHIAVE_POST = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _RE_TEMPO = re.compile(r"^\d+\s*[a-zà-ú]{1,4}\s*•?$")
 _RE_DATA = re.compile(r"inviat|sent|data collegamento|connected|collegat", re.I)
 _RE_PERMALINK = re.compile(r"linkedin\.com/posts/([a-z0-9-]+)_", re.I)
+_RE_CONTESTO = re.compile(r"ha aggiunto un commento|consiglia|festeggia|ha reagito|ha condiviso|commented|celebrat|likes this|reposted|Consigliato per te|Suggested", re.I)
 
 
 def _testo(el) -> str:
@@ -164,6 +165,9 @@ def parse_feed_posts(html: str) -> list[dict]:
     out = []
     for post in _contenitori_post(soup):
         figli = post.find_all(recursive=False)
+        commento = post.find("p", recursive=False) or post.find(attrs={"componentkey": re.compile(r"^(expanded|translatable-commentary)")})
+        if commento is None:
+            continue  # caroselli «Consigliato per te», annunci, moduli senza testo
         testa = next((f for f in figli if f.find("a", href=re.compile(r"/in/"))), post)
         # Nell'intestazione «X ha aggiunto un commento» il primo link è di chi ha
         # commentato: l'autore è l'ultimo link persona con testo. Se dopo di lui
@@ -180,8 +184,7 @@ def parse_feed_posts(html: str) -> list[dict]:
         spans = [_testo(sp) for sp in testa.find_all("span")]
         dopo = spans[spans.index(nome) + 1:] if nome in spans else spans
         headline = next((t for t in dopo if t and not t.startswith("•") and not _RE_TEMPO.match(t)
-                         and t not in ("Segui", "Follow") and len(t) > 3), "")
-        commento = post.find("p", recursive=False) or post.find(attrs={"componentkey": re.compile(r"^(expanded|translatable-commentary)")})
+                         and not _RE_CONTESTO.search(t) and t not in ("Segui", "Follow") and len(t) > 3), "")
         testo = _testo(commento)
         url = None
         chiave = post.find(attrs={"componentkey": re.compile(r"^translatable-commentary")})
@@ -195,6 +198,7 @@ def parse_feed_posts(html: str) -> list[dict]:
             "autore_headline": headline[:200],
             "testo": testo[:1500],
             "chiave": post.get("componentkey"),
+            "contesto": next((t for t in spans if _RE_CONTESTO.search(t)), ""),
         })
     return [p for p in out if p["autore_url"]]
 

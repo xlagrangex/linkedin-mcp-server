@@ -294,32 +294,23 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
             t0 = dt.datetime.now()
             try:
                 posts, visti = [], set()
-                if not keywords:
-                    # Il feed lo scorre l'estrattore originale, che sa aspettare i
-                    # caricamenti e cattura i permalink dai payload SDUI.
-                    sezione = await extractor.extract_feed(num_posts=limit)
-                    for r in sezione.references or []:
-                        u = str(r.get("url", "")) if isinstance(r, dict) else str(getattr(r, "url", ""))
-                        if u and not u.startswith("http"):
-                            u = f"https://www.linkedin.com{u}"
-                        if u and u not in permalink:
+                html = await _apri(extractor, url)
+                # Il feed tiene nel DOM solo i post vicini alla finestra: si legge
+                # a ogni scroll e si accumula per chiave del contenitore.
+                for giro in range(24):
+                    for m in _POST_SLUG_URL_RE.finditer(html):
+                        u = f"https://www.linkedin.com/posts/{m.group('slug')}"
+                        if u not in permalink:
                             permalink.append(u)
-                    html = await page.content()
-                    logger.info("get_feed_posts: feed scorso in %ss", (dt.datetime.now() - t0).seconds)
-                else:
-                    html = await _apri(extractor, url)
-                for m in _POST_SLUG_URL_RE.finditer(html):
-                    u = f"https://www.linkedin.com/posts/{m.group('slug')}"
-                    if u not in permalink:
-                        permalink.append(u)
-                for _ in range(1 if not keywords else 10):
                     for p in S.parse_feed_posts(html):
                         if p["chiave"] not in visti:
                             visti.add(p["chiave"])
                             posts.append(p)
-                    if len(posts) >= limit or not keywords:
+                            if p.get("contesto"):
+                                logger.info("get_feed_posts: contesto «%s» autore %s", p["contesto"][:60], p["autore_url"])
+                    if len(posts) >= limit:
                         break
-                    await _scorri(extractor, 2)
+                    await _scorri(extractor, 1)
                     html = await page.content()
             finally:
                 page.remove_listener("response", _on_response)
@@ -332,6 +323,7 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
             posts = S.unisci_permalink(posts, permalink)
             for p in posts:
                 p.pop("chiave", None)
+                p.pop("contesto", None)
             return posts[:limit]
         except AuthenticationError as e:
             return [_errore_sessione(e)]
