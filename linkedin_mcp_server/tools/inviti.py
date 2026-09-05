@@ -54,6 +54,24 @@ async def _apri(extractor, url: str) -> str:
 
 
 def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS) -> None:
+    @mcp.tool(timeout=tool_timeout, title="Dump Page HTML",
+              annotations={"readOnlyHint": True, "openWorldHint": True}, tags={"bizstudio", "debug"}, exclude_args=["extractor"])
+    async def dump_page_html(
+        ctx: Context,
+        url: str,
+        scorri: Annotated[int, Field(ge=0, le=20)] = 3,
+        extractor: Any | None = None,
+    ) -> dict[str, Any]:
+        """Raw ``page.content()`` of a LinkedIn URL after ``scorri`` scrolls. For fixtures only."""
+        try:
+            extractor = extractor or await get_ready_extractor(ctx, tool_name="dump_page_html")
+            await _apri(extractor, url)
+            await _scorri(extractor, scorri)
+            html = await extractor._page.content()
+            return {"url": extractor._page.url, "html": html}
+        except AuthenticationError as e:
+            return _errore_sessione(e)
+
     @mcp.tool(timeout=tool_timeout, title="Get Sent Invitations",
               annotations={"readOnlyHint": True, "openWorldHint": True}, tags={"person", "bizstudio"}, exclude_args=["extractor"])
     async def get_sent_invitations(
