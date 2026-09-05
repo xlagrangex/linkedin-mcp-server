@@ -163,11 +163,18 @@ def parse_feed_posts(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     out = []
     for post in _contenitori_post(soup):
-        autore = next((a for a in post.select("a[href*='/in/']") if _testo(a)), None)
-        if autore is None:
-            continue
         figli = post.find_all(recursive=False)
         testa = next((f for f in figli if f.find("a", href=re.compile(r"/in/"))), post)
+        # Nell'intestazione «X ha aggiunto un commento» il primo link è di chi ha
+        # commentato: l'autore è l'ultimo link persona con testo. Se dopo di lui
+        # c'è un link azienda con testo, il post è di un'azienda.
+        ancore = [a for a in testa.select("a[href*='/in/'], a[href*='/company/']") if _testo(a)]
+        persone = [a for a in ancore if "/in/" in a.get("href", "")]
+        if not persone:
+            continue
+        autore = persone[-1]
+        if any("/company/" in a.get("href", "") for a in ancore[ancore.index(autore) + 1:]):
+            continue
         nome_el = autore.find("span")
         nome = _testo(nome_el) if nome_el is not None else _testo(autore).split("•")[0].strip()
         spans = [_testo(sp) for sp in testa.find_all("span")]

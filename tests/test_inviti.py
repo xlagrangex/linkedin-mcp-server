@@ -59,3 +59,19 @@ def test_data_relativa():
     assert S.parse_data_relativa("4 set 2026", OGGI) == "2026-09-04"
     assert S.parse_data_relativa(" 5 settembre 2026", OGGI) == "2026-09-05"
     assert S.parse_data_relativa("", OGGI) is None
+
+
+def _post(chiave, testa, testo="testo del post lungo abbastanza"):
+    return f"<div componentkey='{chiave}'><h2>Post nel feed</h2><div>{testa}</div><p><span>{testo}</span></p></div>"
+
+
+def test_post_commentato_prende_l_autore_vero_e_salta_le_aziende():
+    k1, k2, k3 = "a" * 43, "b" * 43, "c" * 43
+    html = "<main>" + _post(k1, "<a href='https://www.linkedin.com/in/chi-commenta/'>Chi Commenta</a><span>Chi Commenta ha aggiunto un commento</span>"
+                            "<a href='https://www.linkedin.com/in/autore-vero/'><span>Autore Vero</span><span>• 2°</span></a><span>Titolare @ Vero Srl</span><span>3g •</span>") \
+        + _post(k2, "<a href='https://www.linkedin.com/in/chi-consiglia/'>Chi Consiglia</a><span>consiglia questo</span>"
+                    "<a href='https://www.linkedin.com/company/acme/'><span>Acme Spa</span></a><span>1.000 follower</span>") \
+        + _post(k3, "<a href='https://www.linkedin.com/company/acme/'><span>Acme Spa</span></a>") + "</main>"
+    posts = S.parse_feed_posts(html)
+    assert [p["autore_url"] for p in posts] == ["linkedin.com/in/autore-vero"]
+    assert posts[0]["autore_nome"] == "Autore Vero" and posts[0]["autore_headline"] == "Titolare @ Vero Srl"

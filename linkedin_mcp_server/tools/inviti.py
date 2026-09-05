@@ -41,10 +41,13 @@ def _errore_sessione(e: Exception) -> dict[str, Any]:
 
 
 async def _scorri(extractor, volte: int) -> None:
+    """Il feed ha un contenitore di scroll proprio: la rotella va mandata al centro della finestra."""
     page = extractor._page
+    vp = page.viewport_size or {"width": 1280, "height": 800}
+    await page.mouse.move(vp["width"] / 2, vp["height"] / 2)
     for _ in range(volte):
         await page.mouse.wheel(0, 2400)
-        await page.wait_for_timeout(700)
+        await page.wait_for_timeout(1000)
 
 
 _CARICA_ALTRO = "button:has-text('Carica altro'), button:has-text('Load more'), button:has-text('Mostra altri'), button:has-text('Show more results')"
@@ -290,19 +293,31 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
             page.on("response", _on_response)
             t0 = dt.datetime.now()
             try:
-                html = await _apri(extractor, url)
-                logger.info("get_feed_posts: pagina aperta in %ss", (dt.datetime.now() - t0).seconds)
+                posts, visti = [], set()
+                if not keywords:
+                    # Il feed lo scorre l'estrattore originale, che sa aspettare i
+                    # caricamenti e cattura i permalink dai payload SDUI.
+                    sezione = await extractor.extract_feed(num_posts=limit)
+                    for r in sezione.references or []:
+                        u = str(r.get("url", "")) if isinstance(r, dict) else str(getattr(r, "url", ""))
+                        if u and not u.startswith("http"):
+                            u = f"https://www.linkedin.com{u}"
+                        if u and u not in permalink:
+                            permalink.append(u)
+                    html = await page.content()
+                    logger.info("get_feed_posts: feed scorso in %ss", (dt.datetime.now() - t0).seconds)
+                else:
+                    html = await _apri(extractor, url)
                 for m in _POST_SLUG_URL_RE.finditer(html):
                     u = f"https://www.linkedin.com/posts/{m.group('slug')}"
                     if u not in permalink:
                         permalink.append(u)
-                posts, visti = [], set()
-                for _ in range(12):
+                for _ in range(1 if not keywords else 10):
                     for p in S.parse_feed_posts(html):
                         if p["chiave"] not in visti:
                             visti.add(p["chiave"])
                             posts.append(p)
-                    if len(posts) >= limit:
+                    if len(posts) >= limit or not keywords:
                         break
                     await _scorri(extractor, 2)
                     html = await page.content()
