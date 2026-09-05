@@ -60,15 +60,46 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
         ctx: Context,
         url: str,
         scorri: Annotated[int, Field(ge=0, le=20)] = 3,
+        cattura: str = "",
         extractor: Any | None = None,
     ) -> dict[str, Any]:
-        """Raw ``page.content()`` of a LinkedIn URL after ``scorri`` scrolls. For fixtures only."""
+        """Raw ``page.content()`` of a LinkedIn URL after ``scorri`` scrolls. For fixtures only.
+
+        With ``cattura`` (a regex) every network response body is searched and the matches
+        are returned per response URL, so we can see which payload carries which data.
+        """
         try:
             extractor = extractor or await get_ready_extractor(ctx, tool_name="dump_page_html")
-            await _apri(extractor, url)
-            await _scorri(extractor, scorri)
-            html = await extractor._page.content()
-            return {"url": extractor._page.url, "html": html}
+            page = extractor._page
+            catture: list[dict[str, Any]] = []
+            attese: list[Any] = []
+            rx = re.compile(cattura) if cattura else None
+
+            def _on_response(resp):
+                async def _leggi():
+                    try:
+                        corpo = (await resp.body()).decode("utf-8", errors="replace")
+                    except Exception:
+                        return
+                    trovati = [m.group(0)[:200] for m in rx.finditer(corpo)]
+                    if trovati:
+                        catture.append({"url": resp.url[:200], "n": len(trovati), "esempi": trovati[:8]})
+                import asyncio
+                attese.append(asyncio.create_task(_leggi()))
+
+            if rx:
+                page.on("response", _on_response)
+            try:
+                await _apri(extractor, url)
+                await _scorri(extractor, scorri)
+                html = await page.content()
+            finally:
+                if rx:
+                    page.remove_listener("response", _on_response)
+                    import asyncio
+                    if attese:
+                        await asyncio.gather(*attese, return_exceptions=True)
+            return {"url": page.url, "html": html, "catture": catture}
         except AuthenticationError as e:
             return _errore_sessione(e)
 
