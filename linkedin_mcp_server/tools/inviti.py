@@ -40,14 +40,30 @@ def _errore_sessione(e: Exception) -> dict[str, Any]:
     return {"errore": chiave, "dettaglio": str(e)[:300]}
 
 
+_JS_SCORRI = """(delta) => {
+  const scrollabili = [...document.querySelectorAll('*')].filter(e => {
+    const s = getComputedStyle(e);
+    return (s.overflowY === 'auto' || s.overflowY === 'scroll') && e.scrollHeight > e.clientHeight + 50;
+  });
+  scrollabili.forEach(e => { e.scrollTop += delta; });
+  window.scrollBy(0, delta);
+  return scrollabili.length;
+}"""
+
+
 async def _scorri(extractor, volte: int) -> None:
-    """Il feed ha un contenitore di scroll proprio: la rotella va mandata al centro della finestra."""
+    """Scorre ogni contenitore scrollabile (il feed ne ha uno proprio) e manda anche la rotella al centro."""
     page = extractor._page
     vp = page.viewport_size or {"width": 1280, "height": 800}
     await page.mouse.move(vp["width"] / 2, vp["height"] / 2)
     for _ in range(volte):
+        try:
+            n = await page.evaluate(_JS_SCORRI, 2400)
+        except Exception:
+            n = -1
         await page.mouse.wheel(0, 2400)
         await page.wait_for_timeout(1000)
+    logger.debug("scorri: %s contenitori scrollabili", n)
 
 
 _CARICA_ALTRO = "button:has-text('Carica altro'), button:has-text('Load more'), button:has-text('Mostra altri'), button:has-text('Show more results')"
