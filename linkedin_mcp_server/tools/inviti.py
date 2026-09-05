@@ -267,9 +267,18 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
             attese: list[Any] = []
 
             def _on_response(resp):
+                # Solo payload dell'app: immagini, font e media non portano permalink e
+                # un body() che non arriva mai bloccherebbe il gather finale.
+                try:
+                    tipo = resp.request.resource_type
+                except Exception:
+                    tipo = ""
+                if tipo not in ("xhr", "fetch", "document") or "linkedin.com" not in resp.url:
+                    return
+
                 async def _leggi():
                     try:
-                        corpo = (await resp.body()).decode("utf-8", errors="replace")
+                        corpo = (await asyncio.wait_for(resp.body(), 8)).decode("utf-8", errors="replace")
                     except Exception:
                         return
                     for m in _POST_SLUG_URL_RE.finditer(corpo):
@@ -279,8 +288,10 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
                 attese.append(asyncio.create_task(_leggi()))
 
             page.on("response", _on_response)
+            t0 = dt.datetime.now()
             try:
                 html = await _apri(extractor, url)
+                logger.info("get_feed_posts: pagina aperta in %ss", (dt.datetime.now() - t0).seconds)
                 for m in _POST_SLUG_URL_RE.finditer(html):
                     u = f"https://www.linkedin.com/posts/{m.group('slug')}"
                     if u not in permalink:
@@ -298,7 +309,11 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
             finally:
                 page.remove_listener("response", _on_response)
                 if attese:
-                    await asyncio.gather(*attese, return_exceptions=True)
+                    try:
+                        await asyncio.wait_for(asyncio.gather(*attese, return_exceptions=True), 15)
+                    except asyncio.TimeoutError:
+                        logger.warning("get_feed_posts: letture di rete non concluse, vado avanti")
+            logger.info("get_feed_posts: %d post nel DOM, %d permalink catturati, %ss", len(posts), len(permalink), (dt.datetime.now() - t0).seconds)
             posts = S.unisci_permalink(posts, permalink)
             for p in posts:
                 p.pop("chiave", None)
