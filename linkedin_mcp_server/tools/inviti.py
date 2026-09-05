@@ -310,7 +310,11 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
                                 logger.info("get_feed_posts: contesto «%s» autore %s", p["contesto"][:60], p["autore_url"])
                     if len(posts) >= limit:
                         break
+                    if giro % 4 == 0:
+                        logger.info("get_feed_posts: scroll %d, contenitori nel DOM %s, post raccolti %d, permalink %d",
+                                    giro, S.conta_contenitori(html), len(posts), len(permalink))
                     await _scorri(extractor, 1)
+                    await page.wait_for_timeout(1200)
                     html = await page.content()
             finally:
                 page.remove_listener("response", _on_response)

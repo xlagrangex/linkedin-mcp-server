@@ -66,7 +66,7 @@ def parse_data_relativa(testo: str, oggi: dt.date) -> str | None:
 _RE_CHIAVE_POST = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _RE_TEMPO = re.compile(r"^\d+\s*[a-zà-ú]{1,4}\s*•?$")
 _RE_DATA = re.compile(r"inviat|sent|data collegamento|connected|collegat", re.I)
-_RE_PERMALINK = re.compile(r"linkedin\.com/posts/([a-z0-9-]+)_", re.I)
+_RE_PERMALINK = re.compile(r"linkedin\.com/posts/([^_/?#]+)_", re.I)
 _RE_CONTESTO = re.compile(r"ha aggiunto un commento|consiglia|festeggia|ha reagito|ha condiviso|commented|celebrat|likes this|reposted|Consigliato per te|Suggested", re.I)
 
 
@@ -148,6 +148,14 @@ def parse_collegamenti(html: str, oggi: dt.date | None = None) -> list[dict]:
     return out
 
 
+def conta_contenitori(html: str) -> tuple[int, int]:
+    """(contenitori a chiave 43, di cui con un commento): per capire cosa c'è nel DOM a ogni scroll."""
+    soup = BeautifulSoup(html, "html.parser")
+    tutti = _contenitori_post(soup)
+    con_testo = [p for p in tutti if p.find("p", recursive=False) is not None or p.find(attrs={"componentkey": re.compile(r"^(expanded|translatable-commentary)")}) is not None]
+    return len(tutti), len(con_testo)
+
+
 def _contenitori_post(soup):
     """I post sono <div componentkey="<43 caratteri>"> non annidati in un altro uguale."""
     tutti = [d for d in soup.find_all(True) if _RE_CHIAVE_POST.match(str(d.get("componentkey", "")))]
@@ -212,9 +220,9 @@ def unisci_permalink(posts: list[dict], permalink: list[str]) -> list[dict]:
     for p in posts:
         if p.get("url"):
             continue
-        vanity = (p["autore_url"] or "").rsplit("/", 1)[-1].lower()
+        vanity = unquote((p["autore_url"] or "").rsplit("/", 1)[-1]).lower()
         for u in liberi:
-            m = _RE_PERMALINK.search(u)
+            m = _RE_PERMALINK.search(unquote(u))
             if m and m.group(1).lower() == vanity:
                 p["url"] = u.split("?")[0]
                 liberi.remove(u)
