@@ -5,6 +5,7 @@ pages instead of reopening every profile, and the feed comes back as one
 record per post with the author's profile URL.
 """
 
+import asyncio
 import datetime as dt
 import logging
 import re
@@ -19,6 +20,7 @@ from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.core.exceptions import AuthenticationError
 from linkedin_mcp_server.dependencies import get_ready_extractor
 from linkedin_mcp_server.scraping import inviti_selettori as S
+from linkedin_mcp_server.scraping.extractor import _POST_SLUG_URL_RE
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,24 @@ async def _scorri(extractor, volte: int) -> None:
     for _ in range(volte):
         await page.mouse.wheel(0, 2400)
         await page.wait_for_timeout(700)
+
+
+_CARICA_ALTRO = "button:has-text('Carica altro'), button:has-text('Load more'), button:has-text('Mostra altri'), button:has-text('Show more results')"
+
+
+async def _carica_altro(extractor) -> bool:
+    """Le pagine inviti/collegamenti del 2026 paginano con un bottone, non a scroll."""
+    page = extractor._page
+    await _scorri(extractor, 1)
+    btn = page.locator(_CARICA_ALTRO).first
+    try:
+        if await btn.count() and await btn.is_visible():
+            await btn.click()
+            await page.wait_for_timeout(1500)
+            return True
+    except Exception:
+        logger.debug("carica altro non cliccabile", exc_info=True)
+    return False
 
 
 async def _apri(extractor, url: str) -> str:
@@ -84,7 +104,6 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
                     trovati = [m.group(0)[:200] for m in rx.finditer(corpo)]
                     if trovati:
                         catture.append({"url": resp.url[:200], "n": len(trovati), "esempi": trovati[:8]})
-                import asyncio
                 attese.append(asyncio.create_task(_leggi()))
 
             if rx:
@@ -96,7 +115,6 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
             finally:
                 if rx:
                     page.remove_listener("response", _on_response)
-                    import asyncio
                     if attese:
                         await asyncio.gather(*attese, return_exceptions=True)
             return {"url": page.url, "html": html, "catture": catture}
@@ -125,10 +143,10 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
                     if v["url"] not in visti:
                         visti.add(v["url"])
                         voci.append(v)
-                prima = len(visti)
-                await _scorri(extractor, 3)
+                if not await _carica_altro(extractor):
+                    break
                 html = await extractor._page.content()
-                if len(S.parse_inviti(html, oggi)) <= prima and all(v["url"] in visti for v in S.parse_inviti(html, oggi)):
+                if all(v["url"] in visti for v in S.parse_inviti(html, oggi)):
                     break
             else:
                 completo = False
@@ -170,7 +188,8 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
                     break
                 if nuove == 0 and pagina > 0:
                     break
-                await _scorri(extractor, 3)
+                if not await _carica_altro(extractor):
+                    break
                 html = await extractor._page.content()
             else:
                 completo = False
@@ -194,30 +213,32 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
             url = S.slug_profilo(linkedin_url)
             page = extractor._page
             html = await _apri(extractor, S.URL_INVITI)
-            for _ in range(20):
+            for _ in range(40):
                 soup = BeautifulSoup(html, "html.parser")
-                btn = S.pulsante_ritira(soup, url)
-                if btn is not None:
+                if S.pulsante_ritira(soup, url) is not None:
                     break
-                prima = len(S.parse_inviti(html))
-                await _scorri(extractor, 3)
-                html = await page.content()
-                if len(S.parse_inviti(html)) <= prima:
+                if not await _carica_altro(extractor):
                     return {"esito": "non_trovato"}
+                html = await page.content()
             else:
                 return {"esito": "non_trovato"}
             slug = url.rsplit("/", 1)[-1]
-            card = page.locator(f"li:has(a[href*='/in/{slug}'])").first
-            bottone = card.locator("button[aria-label*='ithdraw'], button[aria-label*='itira']").first
+            card = page.locator(f"div[role='listitem']:has(a[href*='/in/{slug}']), li:has(a[href*='/in/{slug}'])").first
+            bottone = card.locator("a[aria-label*='itira'], a[aria-label*='ithdraw'], button[aria-label*='ithdraw'], button[aria-label*='itira']").first
             if await bottone.count() == 0:
-                bottone = card.locator("button").last
+                return {"esito": "non_trovato", "errore_lettura": "controllo Ritira non trovato nella card"}
             await bottone.click()
-            await page.wait_for_timeout(800)
-            conferma = page.locator("[role='dialog'] button[data-test-dialog-primary-btn], [role='alertdialog'] button, [role='dialog'] button").last
-            if await conferma.count():
+            await page.wait_for_timeout(1000)
+            dialogo = page.locator("[role='dialog'], [role='alertdialog']").last
+            if await dialogo.count():
+                conferma = dialogo.locator("button:has-text('Ritira'), button:has-text('Withdraw'), button[data-test-dialog-primary-btn]").last
+                if await conferma.count() == 0:
+                    conferma = dialogo.locator("button").last
                 await conferma.click()
-                await page.wait_for_timeout(800)
-            return {"esito": "ok"}
+                await page.wait_for_timeout(1000)
+            html = await page.content()
+            ancora = S.pulsante_ritira(BeautifulSoup(html, "html.parser"), url) is not None
+            return {"esito": "non_trovato" if ancora else "ok"}
         except AuthenticationError as e:
             return _errore_sessione(e)
         except Exception as e:
@@ -239,17 +260,48 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
         try:
             extractor = extractor or await get_ready_extractor(ctx, tool_name="get_feed_posts")
             url = S.URL_RICERCA_POST.format(q=quote(keywords)) if keywords else S.URL_FEED
-            html = await _apri(extractor, url)
-            posts, visti = [], set()
-            for _ in range(12):
-                for p in S.parse_feed_posts(html):
-                    if p["url"] not in visti:
-                        visti.add(p["url"])
-                        posts.append(p)
-                if len(posts) >= limit:
-                    break
-                await _scorri(extractor, 2)
-                html = await extractor._page.content()
+            page = extractor._page
+            # Il DOM non espone il permalink dei post delle persone: lo si legge
+            # dalle risposte di rete (campo postSlugUrl), come fa extract_feed.
+            permalink: list[str] = []
+            attese: list[Any] = []
+
+            def _on_response(resp):
+                async def _leggi():
+                    try:
+                        corpo = (await resp.body()).decode("utf-8", errors="replace")
+                    except Exception:
+                        return
+                    for m in _POST_SLUG_URL_RE.finditer(corpo):
+                        u = f"https://www.linkedin.com/posts/{m.group('slug')}"
+                        if u not in permalink:
+                            permalink.append(u)
+                attese.append(asyncio.create_task(_leggi()))
+
+            page.on("response", _on_response)
+            try:
+                html = await _apri(extractor, url)
+                for m in _POST_SLUG_URL_RE.finditer(html):
+                    u = f"https://www.linkedin.com/posts/{m.group('slug')}"
+                    if u not in permalink:
+                        permalink.append(u)
+                posts, visti = [], set()
+                for _ in range(12):
+                    for p in S.parse_feed_posts(html):
+                        if p["chiave"] not in visti:
+                            visti.add(p["chiave"])
+                            posts.append(p)
+                    if len(posts) >= limit:
+                        break
+                    await _scorri(extractor, 2)
+                    html = await page.content()
+            finally:
+                page.remove_listener("response", _on_response)
+                if attese:
+                    await asyncio.gather(*attese, return_exceptions=True)
+            posts = S.unisci_permalink(posts, permalink)
+            for p in posts:
+                p.pop("chiave", None)
             return posts[:limit]
         except AuthenticationError as e:
             return [_errore_sessione(e)]

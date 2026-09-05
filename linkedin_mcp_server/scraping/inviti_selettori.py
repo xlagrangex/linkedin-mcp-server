@@ -63,30 +63,18 @@ def parse_data_relativa(testo: str, oggi: dt.date) -> str | None:
     return None
 
 
-def _nome_da(card) -> str:
-    for sel in (".artdeco-entity-lockup__title", "[data-view-name*='name']", "span[aria-hidden='true']", "strong", "a[href*='/in/']"):
-        el = card.select_one(sel)
-        if el and el.get_text(strip=True):
-            return el.get_text(" ", strip=True)
-    return card.get_text(" ", strip=True)[:80]
+_RE_CHIAVE_POST = re.compile(r"^[A-Za-z0-9_-]{43}$")
+_RE_TEMPO = re.compile(r"^\d+\s*[a-zà-ú]{1,4}\s*•?$")
+_RE_DATA = re.compile(r"inviat|sent|data collegamento|connected|collegat", re.I)
+_RE_PERMALINK = re.compile(r"linkedin\.com/posts/([a-z0-9-]+)_", re.I)
 
 
-def _data_da(card, oggi: dt.date) -> str | None:
-    t = card.find("time")
-    if t is not None:
-        if t.get("datetime"):
-            return t["datetime"][:10]
-        d = parse_data_relativa(t.get_text(" ", strip=True), oggi)
-        if d:
-            return d
-    for el in card.select(".time-badge, .artdeco-entity-lockup__caption, [class*='time'], [class*='caption'], span"):
-        d = parse_data_relativa(el.get_text(" ", strip=True), oggi)
-        if d:
-            return d
-    return parse_data_relativa(card.get_text(" ", strip=True), oggi)
+def _testo(el) -> str:
+    return el.get_text(" ", strip=True) if el is not None else ""
 
 
 def _card_persone(soup, radice_sel: list[str]):
+    """Le card della pagina: prima i contenitori noti, poi un fallback per link /in/."""
     for sel in radice_sel:
         cards = [c for c in soup.select(sel) if c.select_one("a[href*='/in/']")]
         if cards:
@@ -105,17 +93,45 @@ def _card_persone(soup, radice_sel: list[str]):
     return cards
 
 
+def _voce(card, oggi: dt.date) -> dict | None:
+    """Una persona da una card (inviti o collegamenti, markup SDUI 2026).
+
+    Nome nel primo <p>, headline nel primo <span> che non è né il nome né una data,
+    data nel testo che contiene «Inviato …» o «Data collegamento: …».
+    """
+    a = card.select_one("a[href*='/in/']")
+    url = slug_profilo(a.get("href")) if a else None
+    if not url:
+        return None
+    p = card.find("p")
+    nome = _testo(p) if p is not None and not _RE_DATA.search(_testo(p)) else ""
+    if not nome:
+        nome = next((_testo(x) for x in card.select("a[href*='/in/']") if _testo(x)), "").split("•")[0].strip()
+    data = None
+    for el in card.find_all(["span", "p", "time"]):
+        t = _testo(el)
+        if el.name == "time" and el.get("datetime"):
+            data = el["datetime"][:10]
+            break
+        if _RE_DATA.search(t) and len(t) < 60:
+            data = parse_data_relativa(t.split(":")[-1], oggi)
+            if data:
+                break
+    headline = next((_testo(sp) for sp in card.find_all("span")
+                     if _testo(sp) and _testo(sp) != nome and not _RE_DATA.search(_testo(sp))
+                     and _testo(sp) not in ("Ritira", "Withdraw", "Messaggio", "Message") and len(_testo(sp)) > 3), "")
+    return {"url": url, "nome": nome[:120], "data": data, "headline": headline[:200]}
+
+
 def parse_inviti(html: str, oggi: dt.date | None = None) -> list[dict]:
     oggi = oggi or dt.date.today()
     soup = BeautifulSoup(html, "html.parser")
     out, visti = [], set()
-    for card in _card_persone(soup, ["li.invitation-card", "[data-view-name='invitation-card']", "main li", "li"]):
-        a = card.select_one("a[href*='/in/']")
-        url = slug_profilo(a.get("href")) if a else None
-        if not url or url in visti:
-            continue
-        visti.add(url)
-        out.append({"url": url, "nome": _nome_da(card), "data": _data_da(card, oggi)})
+    for card in _card_persone(soup, ["div[role='listitem']", "li.invitation-card", "[data-view-name='invitation-card']", "main li"]):
+        v = _voce(card, oggi)
+        if v and v["url"] not in visti:
+            visti.add(v["url"])
+            out.append({"url": v["url"], "nome": v["nome"], "data": v["data"]})
     return out
 
 
@@ -123,60 +139,82 @@ def parse_collegamenti(html: str, oggi: dt.date | None = None) -> list[dict]:
     oggi = oggi or dt.date.today()
     soup = BeautifulSoup(html, "html.parser")
     out, visti = [], set()
-    for card in _card_persone(soup, ["li.mn-connection-card", "[data-view-name='connections-list'] li", "main li", "li"]):
-        a = card.select_one("a[href*='/in/']")
-        url = slug_profilo(a.get("href")) if a else None
-        if not url or url in visti:
-            continue
-        visti.add(url)
-        out.append({"url": url, "nome": _nome_da(card), "data": _data_da(card, oggi)})
+    for card in _card_persone(soup, ["div[componentkey^='ConnectionCard_']", "li.mn-connection-card", "[data-view-name='connections-list'] li", "main li"]):
+        v = _voce(card, oggi)
+        if v and v["url"] not in visti:
+            visti.add(v["url"])
+            out.append({"url": v["url"], "nome": v["nome"], "data": v["data"]})
     return out
 
 
+def _contenitori_post(soup):
+    """I post sono <div componentkey="<43 caratteri>"> non annidati in un altro uguale."""
+    tutti = [d for d in soup.find_all(True) if _RE_CHIAVE_POST.match(str(d.get("componentkey", "")))]
+    return [d for d in tutti if not any(_RE_CHIAVE_POST.match(str(p.get("componentkey", ""))) for p in d.parents)]
+
+
 def parse_feed_posts(html: str) -> list[dict]:
+    """Un record per post con autore persona: {url, autore_url, autore_nome, autore_headline, testo, chiave}.
+
+    ``url`` è valorizzata solo se il markup la contiene (shareId nel commento
+    traducibile); altrimenti resta None e la si completa con
+    :func:`unisci_permalink` dai link catturati sulla rete.
+    """
     soup = BeautifulSoup(html, "html.parser")
-    out, visti = [], set()
-    for a in soup.select("a[href*='/feed/update/'], a[href*='/posts/']"):
-        href = a.get("href") or ""
-        url = href if href.startswith("http") else f"https://www.linkedin.com{href}"
-        url = url.split("?")[0]
-        if url in visti:
-            continue
-        cont = a
-        autore = None
-        for _ in range(12):
-            if cont.parent is None:
-                break
-            cont = cont.parent
-            autore = cont.select_one("a[href*='/in/']")
-            if autore is not None and cont.name in ("article", "div", "li"):
-                testo_el = cont.select_one("[class*='commentary'], [class*='update-components-text'], [data-test-id*='main-feed-activity-card__commentary'], p")
-                if testo_el is not None or cont.name == "article":
-                    break
+    out = []
+    for post in _contenitori_post(soup):
+        autore = next((a for a in post.select("a[href*='/in/']") if _testo(a)), None)
         if autore is None:
             continue
-        visti.add(url)
-        head = ""
-        for el in cont.select("[class*='description'], [class*='headline'], [class*='subline'], [class*='secondary']"):
-            t = el.get_text(" ", strip=True)
-            if t and t != _nome_da(cont):
-                head = t
-                break
-        testo_el = cont.select_one("[class*='commentary'], [class*='update-components-text'], p")
+        figli = post.find_all(recursive=False)
+        testa = next((f for f in figli if f.find("a", href=re.compile(r"/in/"))), post)
+        nome_el = autore.find("span")
+        nome = _testo(nome_el) if nome_el is not None else _testo(autore).split("•")[0].strip()
+        spans = [_testo(sp) for sp in testa.find_all("span")]
+        dopo = spans[spans.index(nome) + 1:] if nome in spans else spans
+        headline = next((t for t in dopo if t and not t.startswith("•") and not _RE_TEMPO.match(t)
+                         and t not in ("Segui", "Follow") and len(t) > 3), "")
+        commento = post.find("p", recursive=False) or post.find(attrs={"componentkey": re.compile(r"^(expanded|translatable-commentary)")})
+        testo = _testo(commento)
+        url = None
+        chiave = post.find(attrs={"componentkey": re.compile(r"^translatable-commentary")})
+        m = re.search(r"shareId=(\d+)", str(chiave.get("componentkey")) if chiave is not None else "")
+        if m:
+            url = f"https://www.linkedin.com/feed/update/urn:li:share:{m.group(1)}/"
         out.append({
             "url": url,
             "autore_url": slug_profilo(autore.get("href")),
-            "autore_nome": autore.get_text(" ", strip=True)[:120],
-            "autore_headline": head[:200],
-            "testo": (testo_el.get_text(" ", strip=True) if testo_el else cont.get_text(" ", strip=True))[:1500],
+            "autore_nome": nome[:120],
+            "autore_headline": headline[:200],
+            "testo": testo[:1500],
+            "chiave": post.get("componentkey"),
         })
     return [p for p in out if p["autore_url"]]
 
 
+def unisci_permalink(posts: list[dict], permalink: list[str]) -> list[dict]:
+    """Assegna a ogni post senza url il primo permalink libero il cui slug autore coincide.
+
+    I permalink hanno forma linkedin.com/posts/<vanity>_<titolo>-activity-<id>-<hash>.
+    """
+    liberi = list(permalink)
+    for p in posts:
+        if p.get("url"):
+            continue
+        vanity = (p["autore_url"] or "").rsplit("/", 1)[-1].lower()
+        for u in liberi:
+            m = _RE_PERMALINK.search(u)
+            if m and m.group(1).lower() == vanity:
+                p["url"] = u.split("?")[0]
+                liberi.remove(u)
+                break
+    return posts
+
+
 def pulsante_ritira(soup, url: str):
-    """Returns the withdraw button element of the card for ``url`` or None."""
-    for card in _card_persone(soup, ["li.invitation-card", "[data-view-name='invitation-card']", "main li", "li"]):
+    """Il controllo «Ritira» della card di ``url``: un <a aria-label="Ritira l’invito…"> nel markup 2026, o un bottone."""
+    for card in _card_persone(soup, ["div[role='listitem']", "li.invitation-card", "[data-view-name='invitation-card']", "main li"]):
         a = card.select_one("a[href*='/in/']")
         if a and slug_profilo(a.get("href")) == url:
-            return card.select_one("button[aria-label*='ithdraw'], button[aria-label*='itira'], button[data-control-name*='withdraw'], button")
+            return card.select_one("a[aria-label*='itira'], a[aria-label*='ithdraw'], button[aria-label*='ithdraw'], button[aria-label*='itira'], button[data-control-name*='withdraw'], button")
     return None
