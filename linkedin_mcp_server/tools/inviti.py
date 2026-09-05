@@ -311,6 +311,16 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
             try:
                 posts, visti = [], set()
                 html = await _apri(extractor, url)
+                if not keywords:
+                    # Il feed a volte apre su «Nuovi post» con la lista ancora vuota.
+                    nuovi = page.locator("button:has-text('Nuovi post'), button:has-text('New posts')").first
+                    try:
+                        if await nuovi.count() and await nuovi.is_visible():
+                            await nuovi.click()
+                            await page.wait_for_timeout(2500)
+                            html = await page.content()
+                    except Exception:
+                        logger.debug("bottone nuovi post", exc_info=True)
                 # Il feed tiene nel DOM solo i post vicini alla finestra: si legge
                 # a ogni scroll e si accumula per chiave del contenitore.
                 for giro in range(24):
