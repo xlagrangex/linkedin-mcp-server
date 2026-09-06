@@ -90,3 +90,13 @@ def test_post_pagina_senza_contenitori_ripiega_sui_meta():
     p = S.parse_post_pagina(html, "https://www.linkedin.com/posts/anna-bianchi_y-activity-2-cd")
     assert p == {"url": "https://www.linkedin.com/posts/anna-bianchi_y-activity-2-cd", "autore_url": "linkedin.com/in/anna-bianchi",
                  "autore_nome": None, "autore_headline": None, "testo": "Testo del post"}
+
+
+def test_post_pagina_markup_classico():
+    html = (FIX / "post_pagina.html").read_text()
+    p = S.parse_post_pagina(html, "https://www.linkedin.com/posts/mario-rossi-0000_x-activity-1234567890-ab")
+    assert p["autore_url"] == "linkedin.com/in/mario-rossi-0000"
+    assert p["autore_nome"] == "Mario Rossi"
+    assert p["autore_headline"] == "Titolare @ Carta Interattiva Srl"
+    assert p["testo"].startswith("Abbiamo messo in produzione la nuova linea di stampa.")
+    assert "Tre mesi di prove" in p["testo"]

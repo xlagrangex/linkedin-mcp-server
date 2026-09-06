@@ -245,10 +245,39 @@ def autore_da_permalink(url: str) -> str | None:
     return f"linkedin.com/in/{unquote(m.group(1))}" if m else None
 
 
+def _primo_visibile(el) -> str | None:
+    """Nel markup classico nome e headline sono ripetuti per gli screen reader:
+    la copia buona è lo span aria-hidden."""
+    if el is None:
+        return None
+    span = el.select_one("span[aria-hidden='true']")
+    return _testo(span or el) or None
+
+
+def parse_post_voyager(html: str, url: str) -> dict | None:
+    """La pagina di un singolo post (`/posts/<slug>`) usa ancora il markup classico:
+    `div.feed-shared-update-v2` con attore e commento nelle classi `update-components-*`."""
+    soup = BeautifulSoup(html, "html.parser")
+    radice = soup.select_one("div.feed-shared-update-v2")
+    if radice is None:
+        return None
+    attore = radice.select_one("a.update-components-actor__meta-link[href*='/in/']")
+    testo = radice.select_one(".update-components-text")
+    return {
+        "url": url,
+        "autore_url": slug_profilo(attore["href"]) if attore else autore_da_permalink(url),
+        "autore_nome": _primo_visibile(radice.select_one(".update-components-actor__title")),
+        "autore_headline": _primo_visibile(radice.select_one(".update-components-actor__description")),
+        "testo": testo.get_text("\n", strip=True) if testo else "",
+    }
+
+
 def parse_post_pagina(html: str, url: str) -> dict:
-    """La pagina di un singolo post ha lo stesso markup SDUI del feed: si prende
-    il primo contenitore con commento. Se non c'è, si ripiega sui meta tag e
-    sull'autore letto dal permalink."""
+    """Un singolo post: prima il markup classico della pagina `/posts/`, poi quello
+    SDUI del feed, infine i meta tag con l'autore letto dal permalink."""
+    classico = parse_post_voyager(html, url)
+    if classico:
+        return classico
     posts = parse_feed_posts(html)
     if posts:
         p = dict(posts[0], url=url)
