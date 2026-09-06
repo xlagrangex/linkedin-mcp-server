@@ -75,3 +75,18 @@ def test_post_commentato_prende_l_autore_vero_e_salta_le_aziende():
     posts = S.parse_feed_posts(html)
     assert [p["autore_url"] for p in posts] == ["linkedin.com/in/autore-vero"]
     assert posts[0]["autore_nome"] == "Autore Vero" and posts[0]["autore_headline"] == "Titolare @ Vero Srl"
+
+
+def test_post_pagina_usa_il_markup_del_feed_e_il_permalink():
+    html = (FIX / "feed.html").read_text()
+    p = S.parse_post_pagina(html, "https://www.linkedin.com/posts/mario-rossi_x-activity-1-ab")
+    assert p["url"] == "https://www.linkedin.com/posts/mario-rossi_x-activity-1-ab"
+    assert p["testo"] and p["autore_url"]
+    assert "chiave" not in p and "contesto" not in p
+
+
+def test_post_pagina_senza_contenitori_ripiega_sui_meta():
+    html = '<html><head><meta property="og:description" content="Testo del post"></head><body></body></html>'
+    p = S.parse_post_pagina(html, "https://www.linkedin.com/posts/anna-bianchi_y-activity-2-cd")
+    assert p == {"url": "https://www.linkedin.com/posts/anna-bianchi_y-activity-2-cd", "autore_url": "linkedin.com/in/anna-bianchi",
+                 "autore_nome": None, "autore_headline": None, "testo": "Testo del post"}

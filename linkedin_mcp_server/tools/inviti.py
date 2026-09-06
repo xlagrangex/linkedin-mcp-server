@@ -264,6 +264,30 @@ def register_inviti_tools(mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TI
             logger.exception("withdraw_invitation")
             return {"esito": "non_trovato", "errore_lettura": str(e)[:300]}
 
+    @mcp.tool(timeout=tool_timeout, title="Get Post",
+              annotations={"readOnlyHint": True, "openWorldHint": True}, tags={"feed", "bizstudio"}, exclude_args=["extractor"])
+    async def get_post(
+        ctx: Context,
+        url: str,
+        extractor: Any | None = None,
+    ) -> dict[str, Any]:
+        """One post by permalink: {url, autore_url, autore_nome, autore_headline, testo}."""
+        try:
+            extractor = extractor or await get_ready_extractor(ctx, tool_name="get_post")
+            if "linkedin.com/" not in url:
+                return {"errore_lettura": "serve l'URL completo del post"}
+            html = await _apri(extractor, url)
+            await extractor._page.wait_for_timeout(2500)
+            html = await extractor._page.content()
+            post = S.parse_post_pagina(html, url)
+            logger.info("get_post: autore %s, %d caratteri di testo", post.get("autore_url"), len(post.get("testo") or ""))
+            return post
+        except AuthenticationError as e:
+            return _errore_sessione(e)
+        except Exception as e:
+            logger.exception("get_post")
+            return {"errore_lettura": str(e)[:300]}
+
     @mcp.tool(timeout=tool_timeout, title="Get Feed Posts",
               annotations={"readOnlyHint": True, "openWorldHint": True}, tags={"feed", "bizstudio"}, exclude_args=["extractor"])
     async def get_feed_posts(

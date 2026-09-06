@@ -237,3 +237,27 @@ def pulsante_ritira(soup, url: str):
         if a and slug_profilo(a.get("href")) == url:
             return card.select_one("a[aria-label*='itira'], a[aria-label*='ithdraw'], button[aria-label*='ithdraw'], button[aria-label*='itira'], button[data-control-name*='withdraw'], button")
     return None
+
+
+def autore_da_permalink(url: str) -> str | None:
+    """`/posts/<vanity>_...` porta il vanity dell'autore: è il profilo, senza aprire nulla."""
+    m = _RE_PERMALINK.search(url or "")
+    return f"linkedin.com/in/{unquote(m.group(1))}" if m else None
+
+
+def parse_post_pagina(html: str, url: str) -> dict:
+    """La pagina di un singolo post ha lo stesso markup SDUI del feed: si prende
+    il primo contenitore con commento. Se non c'è, si ripiega sui meta tag e
+    sull'autore letto dal permalink."""
+    posts = parse_feed_posts(html)
+    if posts:
+        p = dict(posts[0], url=url)
+        p.pop("chiave", None)
+        p.pop("contesto", None)
+        if not p.get("autore_url"):
+            p["autore_url"] = autore_da_permalink(url)
+        return p
+    soup = BeautifulSoup(html, "html.parser")
+    meta = soup.select_one("meta[property='og:description'], meta[name='description']")
+    return {"url": url, "autore_url": autore_da_permalink(url), "autore_nome": None, "autore_headline": None,
+            "testo": (meta.get("content") or "").strip() if meta else ""}
