@@ -90,6 +90,12 @@ class ActionSignals:
     finds no top-card root on incoming profiles (they have no Message
     button) and would otherwise mis-anchor on sidebar cards."""
 
+    invite_vanity: str | None = None
+    """Real vanityName read from the invite anchor when the profile was
+    reached through a member id (``/in/ACoAA...``): the exact-name selector
+    cannot match there, so the send deeplink must use this slug instead."""
+
+
 
 def detect_connection_state(signals: ActionSignals) -> ConnectionState:
     """Determine the relationship state for a profile from structural signals.

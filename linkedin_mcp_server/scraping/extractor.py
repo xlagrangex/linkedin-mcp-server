@@ -593,10 +593,31 @@ _ACTION_SIGNALS_JS = (
   const inviteSel = `a[href*="/preload/custom-invite/?vanityName=${safe}"]`;
   const editSel = `a[href*="/in/${safe}/edit/intro/"]`;
 
-  const hasInvite = !!document.querySelector(inviteSel);
+  let hasInvite = !!document.querySelector(inviteSel);
   const hasEditIntro = !!main.querySelector(editSel);
 
   const actionRoot = findActionRoot(main);
+
+  // Profiles reached through a member id (/in/ACoAA...) carry an invite
+  // anchor whose vanityName is the real slug, so the exact selector above
+  // never matches. Fall back to the invite anchor inside the action root
+  // (or the portal-rendered More menu) and hand its vanityName back.
+  let inviteVanity = null;
+  if (!hasInvite && /^ACoAA/.test(username)) {
+    const genericSel = 'a[href*="/preload/custom-invite/?vanityName="]';
+    const scopes = [actionRoot, ...document.querySelectorAll('[role="menu"]')];
+    for (const scope of scopes) {
+      const a = scope ? scope.querySelector(genericSel) : null;
+      if (!a) continue;
+      const href = a.getAttribute('href') || a.href || '';
+      const m = href.match(/vanityName=([^&#]+)/);
+      if (m) {
+        inviteVanity = decodeURIComponent(m[1]);
+        hasInvite = true;
+        break;
+      }
+    }
+  }
 
   let hasComposeInActionRoot = false;
   let hasLabeledActionButton = false;
@@ -620,6 +641,7 @@ _ACTION_SIGNALS_JS = (
 
   return {
     hasInvite,
+    inviteVanity,
     hasComposeInActionRoot,
     hasEditIntro,
     hasLabeledActionButton,
@@ -2198,6 +2220,7 @@ class LinkedInExtractor:
                 has_labeled_action_anchor=False,
                 has_incoming_action_row=False,
             )
+        vanity = data.get("inviteVanity")
         return ActionSignals(
             has_invite_anchor=bool(data.get("hasInvite")),
             has_compose_anchor_in_action_root=bool(data.get("hasComposeInActionRoot")),
@@ -2205,6 +2228,7 @@ class LinkedInExtractor:
             has_labeled_action_button=bool(data.get("hasLabeledActionButton")),
             has_labeled_action_anchor=bool(data.get("hasLabeledActionAnchor")),
             has_incoming_action_row=bool(data.get("hasIncomingActionRow")),
+            invite_vanity=vanity if isinstance(vanity, str) and vanity else None,
         )
 
     async def _submit_invite_dialog(
@@ -2506,9 +2530,12 @@ class LinkedInExtractor:
                     logger.debug("Escape after More-menu reread failed", exc_info=True)
                 logger.info("Post-More signals for %s: signals=%s", username, signals)
 
+        # A member-id lookup (/in/ACoAA...) resolves to the real slug through
+        # the invite anchor LinkedIn rendered; the deeplink must use that slug.
+        vanity = signals.invite_vanity or username
         invite_url = (
             "https://www.linkedin.com/preload/custom-invite/"
-            f"?vanityName={quote_plus(username)}"
+            f"?vanityName={quote_plus(vanity)}"
         )
 
         # Write-gate: submit only when LinkedIn exposed the vanityName invite

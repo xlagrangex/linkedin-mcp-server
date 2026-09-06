@@ -256,3 +256,53 @@ class TestClickIncomingAccept:
         await dom_page.set_content(_page_html(FOLLOW_ONLY_TOP_CARD, VIDEO_PLAYER_BAR))
         clicked = await dom_page.evaluate(_CLICK_INCOMING_ACCEPT_JS)
         assert clicked is False
+
+
+# Profile reached through a member id (/in/ACoAA...): the exact vanityName
+# selector cannot match because LinkedIn renders the real slug in the invite
+# anchor. The fallback must read that slug from the top-card action row only,
+# never from sidebar cards that invite other people.
+MEMBER_ID_TOP_CARD = """
+<section class="topcard">
+  <h1>Mario Rossi</h1>
+  <div class="actions">
+    <a href="/preload/custom-invite/?vanityName=mario-rossi-1a2b"
+      aria-label="Mario Rossi als Kontakt einladen">Vernetzen</a>
+    <a href="/messaging/compose/?profileUrn=urn%3Ali%3Afsd_profile%3ACCC"
+      aria-disabled="false">Nachricht</a>
+    <button type="button" aria-expanded="false">Mehr</button>
+  </div>
+</section>
+"""
+
+FOLLOW_ONLY_TOP_CARD = """
+<section class="topcard">
+  <h1>Mario Rossi</h1>
+  <div class="actions">
+    <button type="button" aria-label="Mario Rossi folgen">Folgen</button>
+    <a href="/messaging/compose/?profileUrn=urn%3Ali%3Afsd_profile%3ACCC"
+      aria-disabled="false">Nachricht</a>
+    <button type="button" aria-expanded="false">Mehr</button>
+  </div>
+</section>
+"""
+
+
+class TestMemberIdInviteFallback:
+    async def test_member_id_reads_real_vanity_from_top_card(self, dom_page):
+        await dom_page.set_content(_page_html(MEMBER_ID_TOP_CARD, SIDEBAR_SECTION))
+        data = await dom_page.evaluate(_ACTION_SIGNALS_JS, "ACoAAAubRL0B7CCzFf9sXVb7XHkii3hmGd7moE8")
+        assert data["hasInvite"] is True
+        assert data["inviteVanity"] == "mario-rossi-1a2b"
+
+    async def test_member_id_ignores_sidebar_invites(self, dom_page):
+        await dom_page.set_content(_page_html(FOLLOW_ONLY_TOP_CARD, SIDEBAR_SECTION))
+        data = await dom_page.evaluate(_ACTION_SIGNALS_JS, "ACoAAAubRL0B7CCzFf9sXVb7XHkii3hmGd7moE8")
+        assert data["hasInvite"] is False
+        assert data["inviteVanity"] is None
+
+    async def test_vanity_username_keeps_exact_match(self, dom_page):
+        await dom_page.set_content(_page_html(MEMBER_ID_TOP_CARD, SIDEBAR_SECTION))
+        data = await dom_page.evaluate(_ACTION_SIGNALS_JS, "someone-else")
+        assert data["hasInvite"] is False
+        assert data["inviteVanity"] is None
